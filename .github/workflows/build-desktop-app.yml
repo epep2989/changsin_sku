@@ -1,0 +1,35 @@
+name: 데스크탑 프로그램 만들기
+
+on:
+  push:
+    paths:
+      - "channel_lookup_desktop/**"
+      - ".github/workflows/build-desktop-app.yml"
+  workflow_dispatch: {}
+
+jobs:
+  build-windows-exe:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: channel_lookup_desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 필요한 부품 설치
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: 프로그램(exe) 만들기
+        run: pyinstaller --onefile --windowed --name 창신리빙_입점현황조회 desktop_app.py
+
+      - name: 결과물 올리기
+        uses: actions/upload-artifact@v4
+        with:
+          name: 창신리빙_입점현황조회_프로그램
+          path: channel_lookup_desktop/dist/창신리빙_입점현황조회.exe
