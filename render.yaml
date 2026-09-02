@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: changsin-channel-lookup
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: SITE_PASSWORD
+        sync: false
+      - key: FLASK_SECRET_KEY
+        sync: false
+      - key: COUPANG_VENDOR_ID
+        sync: false
+      - key: COUPANG_ACCESS_KEY
+        sync: false
+      - key: COUPANG_SECRET_KEY
+        sync: false
+      - key: NAVER_CLIENT_ID
+        sync: false
+      - key: NAVER_CLIENT_SECRET
+        sync: false
+      - key: ELEVENST_API_KEY
+        sync: false
+      - key: CAFE24_MALL_ID
+        sync: false
+      - key: CAFE24_CLIENT_ID
+        sync: false
+      - key: CAFE24_CLIENT_SECRET
+        sync: false
+      - key: CAFE24_ACCESS_TOKEN
+        sync: false
+      - key: CAFE24_REFRESH_TOKEN
+        sync: false
