@@ -71,6 +71,30 @@ class Cafe24Client:
             "X-Cafe24-Api-Version": API_VERSION,
         }
 
+    @staticmethod
+    def exchange_authorization_code(
+        mall_id: str, client_id: str, client_secret: str, code: str, redirect_uri: str
+    ) -> tuple[str, str]:
+        """최초 1회만 필요: 브라우저에서 로그인/승인하고 받은 인가코드(code)를
+        access_token/refresh_token으로 교환합니다. (퍼블릭 앱 OAuth2 플로우)"""
+        basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+        resp = requests.post(
+            f"https://{mall_id}.cafe24api.com/api/v2/oauth/token",
+            headers={
+                "Authorization": f"Basic {basic}",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri,
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["access_token"], data.get("refresh_token", "")
+
     def search_products(
         self,
         keyword: str | None = None,
