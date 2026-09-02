@@ -26,10 +26,10 @@ jobs:
           pip install pyinstaller
 
       - name: 프로그램(exe) 만들기
-        run: pyinstaller --onefile --windowed --name 창신리빙_입점현황조회 desktop_app.py
+        run: pyinstaller --onedir --noupx --windowed --name 창신리빙_입점현황조회 desktop_app.py
 
       - name: 결과물 올리기
         uses: actions/upload-artifact@v4
         with:
           name: 창신리빙_입점현황조회_프로그램
-          path: channel_lookup_desktop/dist/창신리빙_입점현황조회.exe
+          path: channel_lookup_desktop/dist/창신리빙_입점현황조회/
