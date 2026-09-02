@@ -18,7 +18,8 @@ import threading
 import tkinter as tk
 import webbrowser
 from tkinter import font as tkfont
-from tkinter import messagebox, scrolledtext
+from tkinter import messagebox, scrolledtext, simpledialog
+from urllib.parse import parse_qs, urlencode, urlparse
 
 # .exe로 묶였을 때(PyInstaller)와 그냥 python으로 실행할 때 모두
 # 이 프로그램과 같은 폴더를 기준으로 platforms/, config.json 을 찾도록 처리합니다.
@@ -67,6 +68,41 @@ def ensure_config_file() -> None:
     if not os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(CONFIG_TEMPLATE, f, ensure_ascii=False, indent=2)
+
+
+def save_config(cfg: dict) -> None:
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+
+CAFE24_REDIRECT_PATH = "/order/basket.html"
+CAFE24_SCOPE = "mall.read_product"
+
+
+def build_cafe24_authorize_url(mall_id: str, client_id: str) -> tuple[str, str]:
+    """카페24 로그인/승인 페이지 주소를 만듭니다. (redirect_uri, 실제 URL) 을 돌려줍니다."""
+    redirect_uri = f"https://{mall_id}.cafe24.com{CAFE24_REDIRECT_PATH}"
+    params = {
+        "response_type": "code",
+        "client_id": client_id,
+        "state": "csn_channel_lookup",
+        "redirect_uri": redirect_uri,
+        "scope": CAFE24_SCOPE,
+    }
+    url = f"https://{mall_id}.cafe24api.com/api/v2/oauth/authorize?{urlencode(params)}"
+    return redirect_uri, url
+
+
+def extract_auth_code(pasted: str) -> str:
+    """사용자가 코드만 붙여넣었을 수도 있고, 리다이렉트된 주소 전체를 붙여넣었을
+    수도 있어서 둘 다 처리합니다."""
+    pasted = (pasted or "").strip()
+    if "code=" in pasted:
+        parsed = urlparse(pasted)
+        qs = parse_qs(parsed.query)
+        if "code" in qs and qs["code"]:
+            return qs["code"][0]
+    return pasted
 
 
 def naver_accounts(cfg: dict) -> list[tuple[str, str, str]]:
@@ -205,8 +241,11 @@ class App(tk.Tk):
         )
         self.search_btn.pack(side="left", ipady=6)
 
+        btn_row = tk.Frame(self, bg="#f4f6f8")
+        btn_row.pack(pady=(6, 12))
+
         settings_btn = tk.Button(
-            self,
+            btn_row,
             text="⚙ API 키 설정 파일 열기",
             font=self.f_small,
             relief="flat",
@@ -215,7 +254,19 @@ class App(tk.Tk):
             cursor="hand2",
             command=self.open_settings,
         )
-        settings_btn.pack(pady=(6, 12))
+        settings_btn.pack(side="left", padx=8)
+
+        cafe24_btn = tk.Button(
+            btn_row,
+            text="🔗 카페24 연결하기 (최초 1회)",
+            font=self.f_small,
+            relief="flat",
+            fg="#3B6EF6",
+            bg="#f4f6f8",
+            cursor="hand2",
+            command=self.start_cafe24_authorize,
+        )
+        cafe24_btn.pack(side="left", padx=8)
 
         result_frame = tk.Frame(self, bg="#ffffff", highlightbackground="#e2e5e9", highlightthickness=1)
         result_frame.pack(padx=20, pady=(0, 20), fill="both", expand=True)
@@ -289,6 +340,69 @@ class App(tk.Tk):
         )
         self.result_box.configure(state="disabled")
         self.search_btn.configure(state="normal", text="검색")
+
+    def start_cafe24_authorize(self):
+        self.cfg = load_config()
+        cafe24 = self.cfg.get("cafe24") or {}
+        mall_id = (cafe24.get("mall_id") or "").strip()
+        client_id = (cafe24.get("client_id") or "").strip()
+        client_secret = (cafe24.get("client_secret") or "").strip()
+
+        if not (mall_id and client_id and client_secret):
+            messagebox.showwarning(
+                "카페24 연결",
+                "먼저 config.json의 cafe24 항목에 mall_id / client_id / client_secret\n"
+                "세 가지를 채워넣고 저장한 다음, 다시 눌러주세요.",
+            )
+            return
+
+        redirect_uri, url = build_cafe24_authorize_url(mall_id, client_id)
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
+
+        info = (
+            "브라우저가 열렸을 거예요.\n\n"
+            "1) 카페24 관리자 계정으로 로그인하고, 권한 승인(허용) 버튼을 눌러주세요.\n"
+            "2) 승인하면 이상한 페이지(장바구니 화면 등)로 이동하는데, 정상이에요.\n"
+            "3) 그 화면의 주소창(맨 위 URL) 전체를 복사해서, 다음 창에 붙여넣어 주세요.\n\n"
+            "브라우저가 안 열렸다면 이 주소를 직접 복사해서 여세요:\n" + url
+        )
+        messagebox.showinfo("카페24 연결 - 1단계", info)
+
+        pasted = simpledialog.askstring(
+            "카페24 연결 - 2단계",
+            "승인 후 이동한 페이지의 주소창(URL) 전체를 여기에 붙여넣어 주세요:",
+            parent=self,
+        )
+        if not pasted:
+            return
+
+        code = extract_auth_code(pasted)
+        if not code:
+            messagebox.showerror("카페24 연결 실패", "주소에서 인증 코드를 찾지 못했어요. 다시 시도해주세요.")
+            return
+
+        try:
+            access_token, refresh_token = Cafe24Client.exchange_authorization_code(
+                mall_id, client_id, client_secret, code, redirect_uri
+            )
+        except Exception as e:  # noqa: BLE001
+            messagebox.showerror(
+                "카페24 연결 실패",
+                f"토큰 교환 중 오류가 발생했어요:\n{e}\n\n"
+                "인증 코드는 발급 후 짧은 시간 안에만 쓸 수 있어요. "
+                "'카페24 연결하기' 버튼을 다시 눌러 처음부터 시도해주세요.",
+            )
+            return
+
+        self.cfg.setdefault("cafe24", {})
+        self.cfg["cafe24"]["access_token"] = access_token
+        self.cfg["cafe24"]["refresh_token"] = refresh_token
+        save_config(self.cfg)
+        messagebox.showinfo("카페24 연결 완료", "연결됐어요! 이제 검색해보시면 카페24 결과도 같이 나와요.")
+        self._refresh_configured_label()
 
     def open_settings(self):
         answer = messagebox.askyesno(
