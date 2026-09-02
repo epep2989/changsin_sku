@@ -6,14 +6,16 @@
 - 인증 방식: bcrypt 서명 기반 OAuth2 client_credentials
   sign = base64(bcrypt(f"{client_id}_{timestamp}", client_secret))
   (client_secret 자체가 bcrypt salt 형식으로 발급됩니다)
+- 상품 검색: POST /external/v1/products/search, 요청 본문은 JSON.
+  (GET + 쿼리파라미터 방식이 아님 — 공식 예제/이슈 트래커 기준으로 확인됨)
+  주로 판매자 상품코드(sellerManagementCode, = 품목코드)로 검색합니다. 이 API는
+  자유 텍스트 상품명 검색은 지원하지 않아서, 상품명으로 넣으면 못 찾을 수 있습니다
+  (그럴 땐 품목코드로 검색해주세요).
 
 주의:
-- 상품 조회 엔드포인트/파라미터는 네이버 커머스 API가 몇 차례 개편된 이력이 있어,
-  실행 전 반드시 최신 공식 문서(https://apicenter.commerce.naver.com/docs)에서
-  '상품 목록 조회' 또는 '상품 검색' API의 정확한 path/method/파라미터명을 확인하고
-  아래 PRODUCT_SEARCH_PATH 및 search_products()의 파라미터를 맞춰주세요.
-- 이 모듈은 토큰 발급까지는 신뢰도 높게 작성되어 있고, 상품 조회 부분은 베스트에포트
-  템플릿입니다.
+- 네이버 쪽 응답 구조가 계정/시점별로 조금씩 다를 수 있어, 아래 파싱 로직은
+  여러 가능한 필드명을 다 시도하는 방식으로 작성했습니다. 혹시 결과가 하나도 안 뜨는데
+  실제로는 상품이 있다면, 한 번 원본 응답(raw)을 로그로 찍어서 필드명을 맞춰주세요.
 """
 from __future__ import annotations
 
@@ -24,10 +26,7 @@ import bcrypt
 import requests
 
 TOKEN_URL = "https://api.commerce.naver.com/external/v1/oauth2/token"
-BASE_URL = "https://api.commerce.naver.com/external"
-
-# TODO: 최신 문서 기준으로 실제 상품 검색 경로를 확인해서 필요시 수정하세요.
-PRODUCT_SEARCH_PATH = "/v1/products/search"
+PRODUCT_SEARCH_URL = "https://api.commerce.naver.com/external/v1/products/search"
 
 
 class NaverCommerceClient:
@@ -64,27 +63,47 @@ class NaverCommerceClient:
 
     def search_products(self, keyword: str | None = None, size: int = 50) -> list[dict]:
         token = self._get_token()
-        headers = {"Authorization": f"Bearer {token}"}
-        params = {"page": 1, "size": size}
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+        body: dict = {"page": 1, "size": size}
         if keyword:
-            # 정확한 파라미터명(productName, searchKeyword 등)은 최신 문서로 확인 필요
-            params["searchKeyword"] = keyword
+            # 품목코드(판매자 상품코드) 기준으로 검색. 이 API는 상품명 자유검색은 지원하지 않습니다.
+            body["sellerManagementCode"] = keyword
 
-        url = f"{BASE_URL}{PRODUCT_SEARCH_PATH}"
-        resp = requests.get(url, headers=headers, params=params, timeout=15)
+        resp = requests.post(PRODUCT_SEARCH_URL, headers=headers, json=body, timeout=15)
         resp.raise_for_status()
         data = resp.json()
 
+        # 응답이 {"contents": [...]} 형태이고, 각 항목이 바로 상품 정보이거나
+        # {"channelProducts": [...]} 로 한 번 더 감싸져 있을 수 있어 둘 다 처리합니다.
+        top_items = data.get("contents") or data.get("content") or data.get("data") or []
+        if isinstance(top_items, dict):
+            top_items = [top_items]
+
         results = []
-        items = data.get("contents") or data.get("content") or data.get("data") or []
-        for item in items:
-            results.append(
-                {
-                    "platform": "네이버",
-                    "product_name": item.get("name") or item.get("productName"),
-                    "product_id": item.get("sellerManagementCode") or item.get("id"),
-                    "status": item.get("statusType") or item.get("status"),
-                    "raw": item,
-                }
-            )
+        for item in top_items:
+            nested = item.get("channelProducts") if isinstance(item, dict) else None
+            entries = nested if nested else [item]
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                results.append(
+                    {
+                        "platform": "네이버",
+                        "product_name": (
+                            entry.get("name")
+                            or entry.get("productName")
+                            or (item.get("name") if isinstance(item, dict) else None)
+                        ),
+                        "product_id": (
+                            entry.get("sellerManagementCode")
+                            or entry.get("channelProductNo")
+                            or entry.get("id")
+                        ),
+                        "status": entry.get("statusType") or entry.get("status"),
+                        "raw": entry,
+                    }
+                )
         return results
