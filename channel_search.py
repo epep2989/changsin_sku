@@ -40,6 +40,30 @@ def _env(name: str) -> str | None:
     return val if val else None
 
 
+def _naver_accounts() -> list[tuple[str, str, str]]:
+    """네이버 스마트스토어는 스토어마다 별도 열쇠가 필요해서, 여러 개를 등록할 수 있게 합니다.
+
+    - 스토어가 1개뿐이면: NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 만 채우면 됩니다.
+    - 스토어가 여러 개면: NAVER_CLIENT_ID_1 / NAVER_CLIENT_SECRET_1 / NAVER_STORE_NAME_1(선택),
+      NAVER_CLIENT_ID_2 / ... 처럼 번호를 붙여서 원하는 만큼(최대 8개) 추가하면 됩니다.
+      NAVER_STORE_NAME_1 에 "블랑", "프랑코" 처럼 이름을 적어두면 결과 화면에 그 이름으로 구분되어 보입니다.
+    """
+    accounts: list[tuple[str, str, str]] = []
+
+    if _env("NAVER_CLIENT_ID"):
+        name = _env("NAVER_STORE_NAME") or "네이버"
+        accounts.append((name, _env("NAVER_CLIENT_ID"), _env("NAVER_CLIENT_SECRET")))
+
+    for i in range(1, 9):
+        cid = _env(f"NAVER_CLIENT_ID_{i}")
+        if not cid:
+            continue
+        name = _env(f"NAVER_STORE_NAME_{i}") or f"네이버 스토어{i}"
+        accounts.append((name, cid, _env(f"NAVER_CLIENT_SECRET_{i}")))
+
+    return accounts
+
+
 def run_search(keyword: str) -> tuple[list[dict], list[str]]:
     """환경변수에 값이 채워진 채널만 자동으로 검색합니다. 결과 목록과 에러 메시지 목록을 반환."""
     all_results: list[dict] = []
@@ -53,13 +77,16 @@ def run_search(keyword: str) -> tuple[list[dict], list[str]]:
         except Exception as e:  # noqa: BLE001
             errors.append(f"[쿠팡] {e}")
 
-    # 네이버
-    if _env("NAVER_CLIENT_ID"):
+    # 네이버 (스토어 여러 개 지원)
+    for store_name, client_id, client_secret in _naver_accounts():
         try:
-            client = NaverCommerceClient(_env("NAVER_CLIENT_ID"), _env("NAVER_CLIENT_SECRET"))
-            all_results += client.search_products(keyword=keyword)
+            client = NaverCommerceClient(client_id, client_secret)
+            results = client.search_products(keyword=keyword)
+            for r in results:
+                r["platform"] = store_name  # 어느 스토어인지 이름으로 구분되게 표시
+            all_results += results
         except Exception as e:  # noqa: BLE001
-            errors.append(f"[네이버] {e}")
+            errors.append(f"[{store_name}] {e}")
 
     # 11번가
     if _env("ELEVENST_API_KEY"):
@@ -114,8 +141,7 @@ def configured_platforms() -> list[str]:
     names = []
     if _env("COUPANG_ACCESS_KEY"):
         names.append("쿠팡")
-    if _env("NAVER_CLIENT_ID"):
-        names.append("네이버")
+    names += [store_name for store_name, _, _ in _naver_accounts()]
     if _env("ELEVENST_API_KEY"):
         names.append("11번가")
     if _env("CAFE24_MALL_ID"):
